@@ -1231,7 +1231,11 @@ impl Client for RemoteClient {
         let (xorb_uploaded, n_bytes_uploaded) = if self.dry_run {
             (true, n_upload_bytes)
         } else if self.ctx.config.client.legacy_direct_xorb_upload {
-            (self.post_xorb(&key, serialized_data, progress_callback, upload_permit).await?, n_upload_bytes)
+            let inserted = self.post_xorb(&key, serialized_data, progress_callback, upload_permit).await?;
+            if let Some(telemetry) = &self.telemetry {
+                telemetry.record_post_xorb_upload();
+            }
+            (inserted, n_upload_bytes)
         } else {
             match self
                 .upload_xorb_through_grants(&key, serialized_data.clone(), &mut progress_callback, &upload_permit)
@@ -1240,10 +1244,19 @@ impl Client for RemoteClient {
                 GrantUploadOutcome::Stored {
                     inserted,
                     n_bytes_uploaded,
-                } => (inserted, n_bytes_uploaded),
+                } => {
+                    // Not inserted means the grant request found the xorb already stored; nothing was uploaded.
+                    if inserted && let Some(telemetry) = &self.telemetry {
+                        telemetry.record_grant_xorb_upload();
+                    }
+                    (inserted, n_bytes_uploaded)
+                },
                 GrantUploadOutcome::Unavailable { n_bytes_uploaded } => {
                     debug!(hash=%key.hash, "Upload grants did not store xorb; uploading through the xorb upload API");
                     let inserted = self.post_xorb(&key, serialized_data, progress_callback, upload_permit).await?;
+                    if let Some(telemetry) = &self.telemetry {
+                        telemetry.record_post_xorb_upload();
+                    }
                     (inserted, n_bytes_uploaded + n_upload_bytes)
                 },
             }
